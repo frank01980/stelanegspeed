@@ -314,8 +314,9 @@
   // Put your Roblox game link between the quotes, like "https://www.roblox.com/games/123456"
   const GAME_LINK = "";
 
-  // Put your Cloudflare Worker link between the quotes (see the steps), like "https://speed-helper.yourname.workers.dev"
-  const HELPER_URL = "";
+  // Avatar finder link. Keep "/api/avatar" if this site is on Vercel with the api/avatar.js file.
+  // Or paste your full link, like "https://dream-egg-index.vercel.app/api/avatar"
+  const HELPER_URL = "/api/avatar";
 
   // amount = speed text, price = Robux, art = which picture, best = show "Best value" sticker
   const speedItems = [
@@ -403,16 +404,25 @@
 
   // Ask the helper (or Roblox proxy) for the user + avatar picture
   async function findUser(name) {
-    const tries = [];
-    if (HELPER_URL) tries.push(HELPER_URL.replace(/\/$/, "") + "/user?name=" + encodeURIComponent(name));
-    for (const url of tries) {
-      try {
-        const r = await fetch(url);
-        if (r.status === 404) return { notFound: true };
-        if (r.ok) return await r.json();
-      } catch (e) { /* try the next one */ }
+    if (!HELPER_URL) return null;
+    try {
+      const base = HELPER_URL.replace(/\/$/, "");
+      const url = /\/api\/avatar$/.test(base)
+        ? base + "?username=" + encodeURIComponent(name)     // your Vercel avatar.js
+        : base + "/user?name=" + encodeURIComponent(name);   // Cloudflare worker.js
+      const r = await fetch(url);
+      let data = null;
+      try { data = await r.json(); } catch (e) { return null; } // not an avatar API
+      if (r.ok && data && data.id) {
+        return { name: data.name, displayName: data.displayName, avatar: data.imageUrl || data.avatar || "" };
+      }
+      if ((r.ok && data && !data.id && !data.error) || (r.status === 404 && data && data.error === "not found")) {
+        return { notFound: true };
+      }
+      return null;
+    } catch (e) {
+      return null; // lookup not available, keep going without the avatar
     }
-    return null; // lookup not available, keep going without the avatar
   }
 
   function showDone(name) {
