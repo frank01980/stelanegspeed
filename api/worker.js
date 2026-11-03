@@ -1,43 +1,36 @@
-// Speed Store helper - paste this whole file into a Cloudflare Worker.
-// It finds a Roblox user by username and sends back their avatar picture.
-// Use: https://YOUR-WORKER.workers.dev/user?name=Builderman
-
-const CORS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
-  "Content-Type": "application/json"
-};
-
-export default {
-  async fetch(request) {
-    if (request.method === "OPTIONS") return new Response(null, { headers: CORS });
-
-    const url = new URL(request.url);
-    const name = (url.searchParams.get("name") || "").trim();
-    if (url.pathname !== "/user" || !/^[A-Za-z0-9_]{3,20}$/.test(name)) {
-      return new Response(JSON.stringify({ error: "bad username" }), { status: 400, headers: CORS });
-    }
-
-    // 1. username -> user id
-    const u = await fetch("https://users.roblox.com/v1/usernames/users", {
+// Vercel serverless function: GET /api/avatar?username=NAME
+// Official Roblox Users + Thumbnails APIs, called from the server.
+export default async function handler(req, res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Cache-Control", "s-maxage=300");
+  const name = String(req.query.username || "").trim();
+  if (!name) return res.status(400).json({ error: "Username is required" });
+  try {
+    const r = await fetch("https://users.roblox.com/v1/usernames/users", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ usernames: [name], excludeBannedUsers: true })
     });
-    const user = (await u.json()).data?.[0];
-    if (!user) {
-      return new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: CORS });
-    }
+    if (!r.ok) throw new Error("users api " + r.status);
+    const j = await r.json();
+    const u = j.data && j.data[0];
+    if (!u) return res.status(200).json({});
 
-    // 2. user id -> avatar headshot picture
-    const t = await fetch(`https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${user.id}&size=150x150&format=Png&isCircular=false`);
-    const avatar = (await t.json()).data?.[0]?.imageUrl || "";
+    const [details, thumb] = await Promise.all([
+      fetch("https://users.roblox.com/v1/users/" + u.id).then(x => x.json()),
+      fetch("https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=" + u.id +
+            "&size=420x420&format=Png", { headers: { Accept: "application/json" } }).then(x => x.json())
+    ]);
 
-    return new Response(JSON.stringify({
-      id: user.id,
-      name: user.name,
-      displayName: user.displayName,
-      avatar
-    }), { headers: { ...CORS, "Cache-Control": "max-age=300" } });
+    res.status(200).json({
+      id: u.id,
+      name: u.name,
+      displayName: details.displayName || u.name,
+      created: details.created || null,
+      imageUrl: (thumb.data && thumb.data[0] && thumb.data[0].imageUrl) ||
+        "https://www.roblox.com/headshot-thumbnail/image?userId=" + u.id + "&width=420&height=420&format=png"
+    });
+  } catch (e) {
+    res.status(500).json({ error: "Roblox request failed" });
   }
-};
+}
